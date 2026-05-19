@@ -79,5 +79,13 @@ target_link_libraries(test_yaml_io_has_key
         ${third_party_libs}
 )
 
+add_executable(test_lidar_loc_fp_retry_time
+        test_lidar_loc_fp_retry_time.cc
+)
+
+target_compile_definitions(test_lidar_loc_fp_retry_time PRIVATE
+        LIGHTNING_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
 install(TARGETS run_slam_offline run_slam_online run_loc_offline run_loc_online
         DESTINATION lib/${PROJECT_NAME})

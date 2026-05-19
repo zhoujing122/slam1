@@ -31,6 +31,10 @@ void ReadOptional(const YAML_IO& yaml, const std::string& node, const std::strin
     }
 }
 
+double LidarInputEndTime(const CloudPtr& input) {
+    return math::ToSec(input->header.stamp) + lo::lidar_time_interval;
+}
+
 }  // namespace
 
 LidarLoc::LidarLoc(LidarLoc::Options options) : options_(options) {
@@ -370,7 +374,7 @@ bool LidarLoc::InitWithFP(CloudPtr input, const SE3& fp_pose) {
     }
 
     if (loc_inited_) {
-        current_timestamp_ = math::ToSec(input->header.stamp);
+        current_timestamp_ = LidarInputEndTime(input);
         localization_result_.confidence_ = fitness_score;
         current_abs_pose_ = pose_esti;
         localization_result_.pose_ = pose_esti;
@@ -401,7 +405,7 @@ bool LidarLoc::InitWithFP(CloudPtr input, const SE3& fp_pose) {
         // 添加失败历史记录
         LOG(INFO) << "init failed, score: " << fitness_score;
         fp_init_fail_pose_vec_.emplace_back(fp_pose);
-        fp_last_tried_time_ = 1e-6 * static_cast<double>(input->header.stamp);
+        fp_last_tried_time_ = LidarInputEndTime(input);
     }
     return loc_inited_;
 }
@@ -514,7 +518,7 @@ void LidarLoc::Align(const CloudPtr& input) {
     assert(input != nullptr);
 
     // 点云去畸变定到了结束时间，所以该点云的定位也是到结束时间的
-    double current_time = math::ToSec(input->header.stamp) + lo::lidar_time_interval;
+    const double current_time = LidarInputEndTime(input);
     current_timestamp_ = current_time;
 
     LOG(INFO) << "current time: " << std::fixed << std::setprecision(12) << current_timestamp_;
