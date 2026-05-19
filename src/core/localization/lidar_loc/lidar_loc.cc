@@ -22,6 +22,17 @@
 
 namespace lightning::loc {
 
+namespace {
+
+template <typename T>
+void ReadOptional(const YAML_IO& yaml, const std::string& node, const std::string& key, T* value) {
+    if (value != nullptr && yaml.HasKey(node, key)) {
+        *value = yaml.GetValue<T>(node, key);
+    }
+}
+
+}  // namespace
+
 LidarLoc::LidarLoc(LidarLoc::Options options) : options_(options) {
     pcl_ndt_.reset(new NDTType());
     pcl_ndt_->setResolution(1.0);
@@ -74,32 +85,29 @@ bool LidarLoc::Init(const std::string& config_path) {
     options_.lidar_loc_odom_th_ = yaml.GetValue<double>("lidar_loc", "lidar_loc_odom_th");
 
     options_.init_with_fp_ = yaml.GetValue<bool>("lidar_loc", "init_with_fp");
-    options_.enable_global_relocalization_ =
-        yaml.GetValue<bool>("lidar_loc", "enable_global_relocalization");
-    options_.global_relocalization_sample_step_ =
-        yaml.GetValue<double>("lidar_loc", "global_relocalization_sample_step");
-    options_.global_relocalization_filter_enable_ =
-        yaml.GetValue<bool>("lidar_loc", "global_relocalization_filter_enable");
-    options_.global_relocalization_min_chunk_points_ =
-        yaml.GetValue<int>("lidar_loc", "global_relocalization_min_chunk_points");
-    options_.global_relocalization_grid_resolution_ =
-        yaml.GetValue<double>("lidar_loc", "global_relocalization_grid_resolution");
-    options_.global_relocalization_obstacle_z_min_ =
-        yaml.GetValue<double>("lidar_loc", "global_relocalization_obstacle_z_min");
-    options_.global_relocalization_obstacle_z_max_ =
-        yaml.GetValue<double>("lidar_loc", "global_relocalization_obstacle_z_max");
-    options_.global_relocalization_clear_radius_ =
-        yaml.GetValue<double>("lidar_loc", "global_relocalization_clear_radius");
-    options_.global_relocalization_support_radius_ =
-        yaml.GetValue<double>("lidar_loc", "global_relocalization_support_radius");
-    options_.global_relocalization_min_support_cells_ =
-        yaml.GetValue<int>("lidar_loc", "global_relocalization_min_support_cells");
-    options_.relocalization_margin_ =
-        yaml.GetValue<double>("lidar_loc", "relocalization_margin");
-    options_.relocalization_top_k_ =
-        yaml.GetValue<int>("lidar_loc", "relocalization_top_k");
-    options_.relocalization_coarse_yaw_steps_ =
-        yaml.GetValue<int>("lidar_loc", "relocalization_coarse_yaw_steps");
+    ReadOptional(yaml, "lidar_loc", "enable_global_relocalization", &options_.enable_global_relocalization_);
+    ReadOptional(yaml, "lidar_loc", "global_relocalization_sample_step",
+                 &options_.global_relocalization_sample_step_);
+    ReadOptional(yaml, "lidar_loc", "global_relocalization_filter_enable",
+                 &options_.global_relocalization_filter_enable_);
+    ReadOptional(yaml, "lidar_loc", "global_relocalization_min_chunk_points",
+                 &options_.global_relocalization_min_chunk_points_);
+    ReadOptional(yaml, "lidar_loc", "global_relocalization_grid_resolution",
+                 &options_.global_relocalization_grid_resolution_);
+    ReadOptional(yaml, "lidar_loc", "global_relocalization_obstacle_z_min",
+                 &options_.global_relocalization_obstacle_z_min_);
+    ReadOptional(yaml, "lidar_loc", "global_relocalization_obstacle_z_max",
+                 &options_.global_relocalization_obstacle_z_max_);
+    ReadOptional(yaml, "lidar_loc", "global_relocalization_clear_radius",
+                 &options_.global_relocalization_clear_radius_);
+    ReadOptional(yaml, "lidar_loc", "global_relocalization_support_radius",
+                 &options_.global_relocalization_support_radius_);
+    ReadOptional(yaml, "lidar_loc", "global_relocalization_min_support_cells",
+                 &options_.global_relocalization_min_support_cells_);
+    ReadOptional(yaml, "lidar_loc", "relocalization_margin", &options_.relocalization_margin_);
+    ReadOptional(yaml, "lidar_loc", "relocalization_top_k", &options_.relocalization_top_k_);
+    ReadOptional(yaml, "lidar_loc", "relocalization_coarse_yaw_steps",
+                 &options_.relocalization_coarse_yaw_steps_);
     options_.enable_parking_static_ = yaml.GetValue<bool>("lidar_loc", "enable_parking_static");
     options_.enable_icp_adjust_ = yaml.GetValue<bool>("lidar_loc", "enable_icp_adjust");
     options_.with_height_ = yaml.GetValue<bool>("loop_closing", "with_height");

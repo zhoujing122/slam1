@@ -24,6 +24,42 @@ class YAML_IO {
     /// 保存文件，不指明路径时，覆盖原文件
     bool Save(const std::string &path = "");
 
+    bool HasKey(const std::string &key) const {
+        assert(is_opened_);
+        if (!yaml_node_.IsDefined() || !yaml_node_.IsMap()) {
+            return false;
+        }
+        return yaml_node_[key].IsDefined();
+    }
+
+    bool HasKey(const std::string &node, const std::string &key) const {
+        assert(is_opened_);
+        if (!yaml_node_.IsDefined() || !yaml_node_.IsMap()) {
+            return false;
+        }
+        YAML::Node parent = yaml_node_[node];
+        if (!parent.IsDefined() || !parent.IsMap()) {
+            return false;
+        }
+        return parent[key].IsDefined();
+    }
+
+    bool HasKey(const std::string &node_1, const std::string &node_2, const std::string &key) const {
+        assert(is_opened_);
+        if (!yaml_node_.IsDefined() || !yaml_node_.IsMap()) {
+            return false;
+        }
+        YAML::Node parent = yaml_node_[node_1];
+        if (!parent.IsDefined() || !parent.IsMap()) {
+            return false;
+        }
+        YAML::Node child = parent[node_2];
+        if (!child.IsDefined() || !child.IsMap()) {
+            return false;
+        }
+        return child[key].IsDefined();
+    }
+
     /// 获取类型为T的参数值
     template <typename T>
     T GetValue(const std::string &key) const {
