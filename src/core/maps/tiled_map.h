@@ -6,11 +6,8 @@
 #define LIGHNING_TILED_MAP_H
 
 #include <opencv2/core/core.hpp>
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <set>
 #include <map>
+#include <set>
 #include <unordered_map>
 
 #include "common/functional_points.h"
@@ -98,6 +95,18 @@ class TiledMap {
         bool verbose_ = false;
     };
 
+    struct RelocCandidateFilterOptions {
+        double sample_step = 5.0;
+        bool filter_enable = true;
+        int min_chunk_points = 50;
+        double grid_resolution = 0.2;
+        double obstacle_z_min = 0.15;
+        double obstacle_z_max = 1.5;
+        double clear_radius = 0.35;
+        double support_radius = 2.0;
+        int min_support_cells = 10;
+    };
+
     using KeyType = Eigen::Matrix<int, 3, 1>;  // 体素的索引
     struct VoxelData {
         VoxelData() {}
@@ -177,8 +186,8 @@ class TiledMap {
     /// 获取所有功能点
     std::vector<FunctionalPoint> GetAllFP() const { return func_points_; }
 
-    /// 返回所有已索引 chunk 的中心位置(世界系)。用于全局重定位时把每个 chunk 中心
-    /// 当作 FP 候选撒进去。Pos2Grid 的反向就是 grid * chunk_size_(网格中心对齐)。
+    /// 返回所有已索引 chunk 的中心位置(世界系)。
+    /// 仅供显式调用,全局重定位过滤失败时不再自动回退到这些点。
     std::vector<Vec3d> GetAllChunkCenters() const {
         std::vector<Vec3d> centers;
         centers.reserve(static_chunks_.size());
@@ -192,93 +201,12 @@ class TiledMap {
     }
 
     /// 返回全局重定位候选位置。sample_step > 0 时,在每个 chunk 的静态点云
-    /// XY 包围盒内按固定间隔撒点;非法间隔退回到每 chunk 一个中心点。
-    std::vector<Vec3d> GetRelocalizationCandidatePositions(double sample_step) const {
-        if (!(sample_step > 0.0) || !std::isfinite(sample_step)) {
-            return GetAllChunkCenters();
-        }
+    /// XY 包围盒内按固定间隔撒点;非法间隔返回空列表,不做无过滤 fallback。
+    std::vector<Vec3d> GetRelocalizationCandidatePositions(double sample_step) const;
 
-        std::vector<Vec3d> candidates;
-        std::set<std::pair<long long, long long>> seen;
-        const double z = origin_.z();
-        const double quant = 1000.0;  // millimeter-level dedupe is enough for map candidates.
-
-        auto axis_samples = [sample_step](double min_v, double max_v) {
-            std::vector<double> values;
-            if (max_v < min_v) {
-                std::swap(min_v, max_v);
-            }
-
-            if ((max_v - min_v) <= sample_step) {
-                values.emplace_back(0.5 * (min_v + max_v));
-                return values;
-            }
-
-            for (double v = min_v; v <= max_v + 1e-6; v += sample_step) {
-                values.emplace_back(v);
-            }
-
-            if (std::fabs(values.back() - max_v) > 1e-6) {
-                values.emplace_back(max_v);
-            }
-            return values;
-        };
-
-        auto add_candidate = [&](double x, double y) {
-            const auto key = std::make_pair(static_cast<long long>(std::llround(x * quant)),
-                                            static_cast<long long>(std::llround(y * quant)));
-            if (seen.insert(key).second) {
-                candidates.emplace_back(x, y, z);
-            }
-        };
-
-        for (const auto& kv : static_chunks_) {
-            const auto& chunk = kv.second;
-            if (!chunk || !chunk->cloud_ || chunk->cloud_->empty()) {
-                continue;
-            }
-
-            double min_x = std::numeric_limits<double>::max();
-            double min_y = std::numeric_limits<double>::max();
-            double max_x = std::numeric_limits<double>::lowest();
-            double max_y = std::numeric_limits<double>::lowest();
-
-            for (const auto& pt : chunk->cloud_->points) {
-                if (!std::isfinite(pt.x) || !std::isfinite(pt.y)) {
-                    continue;
-                }
-                min_x = std::min(min_x, static_cast<double>(pt.x));
-                min_y = std::min(min_y, static_cast<double>(pt.y));
-                max_x = std::max(max_x, static_cast<double>(pt.x));
-                max_y = std::max(max_y, static_cast<double>(pt.y));
-            }
-
-            if (min_x > max_x || min_y > max_y) {
-                continue;
-            }
-
-            for (double x : axis_samples(min_x, max_x)) {
-                for (double y : axis_samples(min_y, max_y)) {
-                    add_candidate(x, y);
-                }
-            }
-        }
-
-        if (candidates.empty()) {
-            return GetAllChunkCenters();
-        }
-
-        std::sort(candidates.begin(), candidates.end(), [](const Vec3d& a, const Vec3d& b) {
-            if (a.x() != b.x()) {
-                return a.x() < b.x();
-            }
-            if (a.y() != b.y()) {
-                return a.y() < b.y();
-            }
-            return a.z() < b.z();
-        });
-        return candidates;
-    }
+    /// 返回全局重定位候选位置。支持候选过滤。
+    std::vector<Vec3d> GetRelocalizationCandidatePositions(
+        const RelocCandidateFilterOptions& opt) const;
 
     int NumActiveChunks() const { return loaded_chunks_.size(); }
 

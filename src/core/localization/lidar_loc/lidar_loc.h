@@ -43,7 +43,15 @@ class LidarLoc {
         float min_init_confidence_ = 0.1;              // 初始化时要求的最小分值
         bool init_with_fp_ = true;                     // 是否使用功能点进行初始化
         bool enable_global_relocalization_ = false;    // 启动时在 chunk 内按间隔撒 FP 候选(大场景全局重定位)
-        double global_relocalization_sample_step_ = 10.0;  // 全局重定位候选采样间隔,<=0 时退回每 chunk 中心
+        double global_relocalization_sample_step_ = 10.0;  // 全局重定位候选采样间隔,<=0 时不生成候选
+        bool global_relocalization_filter_enable_ = true;   // 是否过滤不可用的全局重定位候选
+        int global_relocalization_min_chunk_points_ = 50;   // 参与候选生成的最少 chunk 点数
+        double global_relocalization_grid_resolution_ = 0.2;      // 候选过滤 2D 栅格分辨率
+        double global_relocalization_obstacle_z_min_ = 0.15;     // 相对地图原点 z 的障碍物下界
+        double global_relocalization_obstacle_z_max_ = 1.5;      // 相对地图原点 z 的障碍物上界
+        double global_relocalization_clear_radius_ = 0.35;       // 候选点障碍物膨胀半径
+        double global_relocalization_support_radius_ = 2.0;      // support cell 搜索半径
+        int global_relocalization_min_support_cells_ = 10;       // 候选点附近最少 support cell 数
         double relocalization_margin_ = 0.3;           // 全局重定位 best 与 second-best 的分数 margin 要求
         int relocalization_top_k_ = 5;                 // 分层搜索:粗筛后保留前 K 个候选进入完整 yaw 扫
         int relocalization_coarse_yaw_steps_ = 4;      // 分层搜索:粗筛阶段的稀疏 yaw 步数(覆盖 ±180° 时建议 4~6)

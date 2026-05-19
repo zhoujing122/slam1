@@ -93,6 +93,14 @@ lidar_loc:
   init_with_fp: true
   enable_global_relocalization: false
   global_relocalization_sample_step: 10.0
+  global_relocalization_filter_enable: true
+  global_relocalization_min_chunk_points: 50
+  global_relocalization_grid_resolution: 0.2
+  global_relocalization_obstacle_z_min: 0.15
+  global_relocalization_obstacle_z_max: 1.5
+  global_relocalization_clear_radius: 0.35
+  global_relocalization_support_radius: 2.0
+  global_relocalization_min_support_cells: 10
   relocalization_margin: 0.3
   relocalization_top_k: 5
   relocalization_coarse_yaw_steps: 8

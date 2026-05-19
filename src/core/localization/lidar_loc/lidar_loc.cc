@@ -78,6 +78,22 @@ bool LidarLoc::Init(const std::string& config_path) {
         yaml.GetValue<bool>("lidar_loc", "enable_global_relocalization");
     options_.global_relocalization_sample_step_ =
         yaml.GetValue<double>("lidar_loc", "global_relocalization_sample_step");
+    options_.global_relocalization_filter_enable_ =
+        yaml.GetValue<bool>("lidar_loc", "global_relocalization_filter_enable");
+    options_.global_relocalization_min_chunk_points_ =
+        yaml.GetValue<int>("lidar_loc", "global_relocalization_min_chunk_points");
+    options_.global_relocalization_grid_resolution_ =
+        yaml.GetValue<double>("lidar_loc", "global_relocalization_grid_resolution");
+    options_.global_relocalization_obstacle_z_min_ =
+        yaml.GetValue<double>("lidar_loc", "global_relocalization_obstacle_z_min");
+    options_.global_relocalization_obstacle_z_max_ =
+        yaml.GetValue<double>("lidar_loc", "global_relocalization_obstacle_z_max");
+    options_.global_relocalization_clear_radius_ =
+        yaml.GetValue<double>("lidar_loc", "global_relocalization_clear_radius");
+    options_.global_relocalization_support_radius_ =
+        yaml.GetValue<double>("lidar_loc", "global_relocalization_support_radius");
+    options_.global_relocalization_min_support_cells_ =
+        yaml.GetValue<int>("lidar_loc", "global_relocalization_min_support_cells");
     options_.relocalization_margin_ =
         yaml.GetValue<double>("lidar_loc", "relocalization_margin");
     options_.relocalization_top_k_ =
@@ -136,8 +152,17 @@ bool LidarLoc::Init(const std::string& config_path) {
     /// 全局重定位: 在每个 chunk 内按配置间隔撒 FP 候选(只入内存,不污染 index.txt)。
     /// 没给粗位姿时,LidarLoc 会遍历所有 FP 试 YawSearch,在大场景下这是兜底机制。
     if (options_.enable_global_relocalization_) {
-        auto candidate_positions =
-            map_->GetRelocalizationCandidatePositions(options_.global_relocalization_sample_step_);
+        TiledMap::RelocCandidateFilterOptions reloc_opt;
+        reloc_opt.sample_step = options_.global_relocalization_sample_step_;
+        reloc_opt.filter_enable = options_.global_relocalization_filter_enable_;
+        reloc_opt.min_chunk_points = options_.global_relocalization_min_chunk_points_;
+        reloc_opt.grid_resolution = options_.global_relocalization_grid_resolution_;
+        reloc_opt.obstacle_z_min = options_.global_relocalization_obstacle_z_min_;
+        reloc_opt.obstacle_z_max = options_.global_relocalization_obstacle_z_max_;
+        reloc_opt.clear_radius = options_.global_relocalization_clear_radius_;
+        reloc_opt.support_radius = options_.global_relocalization_support_radius_;
+        reloc_opt.min_support_cells = options_.global_relocalization_min_support_cells_;
+        auto candidate_positions = map_->GetRelocalizationCandidatePositions(reloc_opt);
         for (size_t i = 0; i < candidate_positions.size(); ++i) {
             FunctionalPoint auto_fp;
             auto_fp.name_ = "auto_" + std::to_string(i);

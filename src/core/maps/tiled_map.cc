@@ -5,10 +5,189 @@
 #include "core/maps/tiled_map.h"
 #include "io/file_io.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <set>
+#include <unordered_set>
+
 #include <pcl/io/pcd_io.h>
 #include <opencv2/opencv.hpp>
 
 namespace lightning {
+
+namespace {
+
+std::uint64_t PackGridKey(int ix, int iy) {
+    return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(ix)) << 32) |
+           static_cast<std::uint32_t>(iy);
+}
+
+int UnpackX(std::uint64_t key) {
+    return static_cast<std::int32_t>(static_cast<std::uint32_t>(key >> 32));
+}
+
+int UnpackY(std::uint64_t key) {
+    return static_cast<std::int32_t>(static_cast<std::uint32_t>(key & 0xffffffffu));
+}
+
+struct ChunkRelocStats {
+    double min_x = 0.0;
+    double max_x = 0.0;
+    double min_y = 0.0;
+    double max_y = 0.0;
+};
+
+class RelocCandidateFilter2D {
+   public:
+    explicit RelocCandidateFilter2D(TiledMap::RelocCandidateFilterOptions opt) : opt_(opt) {
+        if (!(opt_.grid_resolution > 0.0) || !std::isfinite(opt_.grid_resolution)) {
+            opt_.grid_resolution = 0.2;
+        }
+        opt_.clear_radius = std::max(0.0, opt_.clear_radius);
+        opt_.support_radius = std::max(0.0, opt_.support_radius);
+        opt_.min_support_cells = std::max(0, opt_.min_support_cells);
+    }
+
+    void AddMapPoint(double x, double y, double z, double ref_z) {
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+            return;
+        }
+
+        const auto [ix, iy] = ToGrid(x, y);
+        const auto key = PackGridKey(ix, iy);
+        support_cells_.insert(key);
+
+        const double dz = z - ref_z;
+        if (dz >= opt_.obstacle_z_min && dz <= opt_.obstacle_z_max) {
+            obstacle_cells_.insert(key);
+        }
+    }
+
+    void Build() {
+        inflated_obstacle_cells_.clear();
+        const int inflate_n = static_cast<int>(std::ceil(opt_.clear_radius / opt_.grid_resolution));
+        for (const auto key : obstacle_cells_) {
+            const int cx = UnpackX(key);
+            const int cy = UnpackY(key);
+
+            for (int dx = -inflate_n; dx <= inflate_n; ++dx) {
+                for (int dy = -inflate_n; dy <= inflate_n; ++dy) {
+                    const double dist = std::sqrt(static_cast<double>(dx * dx + dy * dy)) * opt_.grid_resolution;
+                    if (dist > opt_.clear_radius) {
+                        continue;
+                    }
+                    inflated_obstacle_cells_.insert(PackGridKey(cx + dx, cy + dy));
+                }
+            }
+        }
+    }
+
+    bool HasInflatedObstacle(double x, double y) const {
+        const auto [ix, iy] = ToGrid(x, y);
+        return inflated_obstacle_cells_.count(PackGridKey(ix, iy)) > 0;
+    }
+
+    int SupportCellCount(double x, double y) const {
+        const auto [cx, cy] = ToGrid(x, y);
+        const int r = static_cast<int>(std::ceil(opt_.support_radius / opt_.grid_resolution));
+        int count = 0;
+
+        for (int dx = -r; dx <= r; ++dx) {
+            for (int dy = -r; dy <= r; ++dy) {
+                const double dist = std::sqrt(static_cast<double>(dx * dx + dy * dy)) * opt_.grid_resolution;
+                if (dist > opt_.support_radius) {
+                    continue;
+                }
+                if (support_cells_.count(PackGridKey(cx + dx, cy + dy)) > 0) {
+                    ++count;
+                }
+            }
+        }
+
+        return count;
+    }
+
+    bool Accept(double x, double y) const {
+        if (!opt_.filter_enable) {
+            return true;
+        }
+        if (HasInflatedObstacle(x, y)) {
+            return false;
+        }
+        return SupportCellCount(x, y) >= opt_.min_support_cells;
+    }
+
+   private:
+    std::pair<int, int> ToGrid(double x, double y) const {
+        const int ix = static_cast<int>(std::floor(x / opt_.grid_resolution));
+        const int iy = static_cast<int>(std::floor(y / opt_.grid_resolution));
+        return {ix, iy};
+    }
+
+    TiledMap::RelocCandidateFilterOptions opt_;
+    std::unordered_set<std::uint64_t> support_cells_;
+    std::unordered_set<std::uint64_t> obstacle_cells_;
+    std::unordered_set<std::uint64_t> inflated_obstacle_cells_;
+};
+
+std::vector<double> AxisSamples(double min_v, double max_v, double sample_step) {
+    std::vector<double> values;
+    if (max_v < min_v) {
+        std::swap(min_v, max_v);
+    }
+
+    if ((max_v - min_v) <= sample_step) {
+        values.emplace_back(0.5 * (min_v + max_v));
+        return values;
+    }
+
+    for (double v = min_v; v <= max_v + 1e-6; v += sample_step) {
+        values.emplace_back(v);
+    }
+
+    if (std::fabs(values.back() - max_v) > 1e-6) {
+        values.emplace_back(max_v);
+    }
+    return values;
+}
+
+bool ComputeChunkRelocStats(const std::shared_ptr<MapChunk>& chunk, int min_chunk_points, ChunkRelocStats& st) {
+    if (!chunk || !chunk->cloud_ || static_cast<int>(chunk->cloud_->size()) < min_chunk_points) {
+        return false;
+    }
+
+    double min_x = std::numeric_limits<double>::max();
+    double min_y = std::numeric_limits<double>::max();
+    double max_x = std::numeric_limits<double>::lowest();
+    double max_y = std::numeric_limits<double>::lowest();
+    int valid_cnt = 0;
+
+    for (const auto& pt : chunk->cloud_->points) {
+        if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
+            continue;
+        }
+
+        min_x = std::min(min_x, static_cast<double>(pt.x));
+        min_y = std::min(min_y, static_cast<double>(pt.y));
+        max_x = std::max(max_x, static_cast<double>(pt.x));
+        max_y = std::max(max_y, static_cast<double>(pt.y));
+        ++valid_cnt;
+    }
+
+    if (valid_cnt < min_chunk_points || min_x > max_x || min_y > max_y) {
+        return false;
+    }
+
+    st.min_x = min_x;
+    st.max_x = max_x;
+    st.min_y = min_y;
+    st.max_y = max_y;
+    return true;
+}
+
+}  // namespace
 
 bool TiledMap::ConvertFromFullPCD(CloudPtr map, const SE3& start_pose, const std::string& map_path) {
     origin_.setZero();
@@ -215,6 +394,126 @@ bool TiledMap::LoadMapIndex() {
     chunk_id_++;
 
     return true;
+}
+
+std::vector<Vec3d> TiledMap::GetRelocalizationCandidatePositions(double sample_step) const {
+    RelocCandidateFilterOptions opt;
+    opt.sample_step = sample_step;
+    opt.filter_enable = false;
+    opt.min_chunk_points = 1;
+    return GetRelocalizationCandidatePositions(opt);
+}
+
+std::vector<Vec3d> TiledMap::GetRelocalizationCandidatePositions(
+    const RelocCandidateFilterOptions& input_opt) const {
+    RelocCandidateFilterOptions opt = input_opt;
+    if (!(opt.sample_step > 0.0) || !std::isfinite(opt.sample_step)) {
+        LOG(ERROR) << "[reloc] invalid sample_step=" << opt.sample_step
+                   << ", no global relocalization candidates generated";
+        return {};
+    }
+    opt.min_chunk_points = std::max(1, opt.min_chunk_points);
+
+    struct ChunkWork {
+        std::shared_ptr<MapChunk> chunk;
+        ChunkRelocStats stats;
+    };
+
+    std::vector<ChunkWork> valid_chunks;
+    valid_chunks.reserve(static_chunks_.size());
+    for (const auto& kv : static_chunks_) {
+        ChunkRelocStats stats;
+        if (!ComputeChunkRelocStats(kv.second, opt.min_chunk_points, stats)) {
+            continue;
+        }
+        valid_chunks.push_back({kv.second, stats});
+    }
+
+    RelocCandidateFilter2D filter(opt);
+    if (opt.filter_enable) {
+        for (const auto& item : valid_chunks) {
+            for (const auto& pt : item.chunk->cloud_->points) {
+                filter.AddMapPoint(pt.x, pt.y, pt.z, origin_.z());
+            }
+        }
+        filter.Build();
+    }
+
+    std::vector<Vec3d> candidates;
+    std::set<std::pair<long long, long long>> seen;
+    const double quant = 1000.0;  // millimeter-level dedupe is enough for map candidates.
+    const double z = origin_.z();
+
+    int raw_count = 0;
+    int reject_obstacle = 0;
+    int reject_support = 0;
+    int reject_duplicate = 0;
+
+    auto add_candidate = [&](double x, double y) {
+        ++raw_count;
+        if (opt.filter_enable) {
+            if (filter.HasInflatedObstacle(x, y)) {
+                ++reject_obstacle;
+                return;
+            }
+            if (filter.SupportCellCount(x, y) < opt.min_support_cells) {
+                ++reject_support;
+                return;
+            }
+        }
+
+        const auto key = std::make_pair(static_cast<long long>(std::llround(x * quant)),
+                                        static_cast<long long>(std::llround(y * quant)));
+        if (!seen.insert(key).second) {
+            ++reject_duplicate;
+            return;
+        }
+        candidates.emplace_back(x, y, z);
+    };
+
+    for (const auto& item : valid_chunks) {
+        const auto xs = AxisSamples(item.stats.min_x, item.stats.max_x, opt.sample_step);
+        const auto ys = AxisSamples(item.stats.min_y, item.stats.max_y, opt.sample_step);
+
+        for (double x : xs) {
+            for (double y : ys) {
+                add_candidate(x, y);
+            }
+        }
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const Vec3d& a, const Vec3d& b) {
+        if (a.x() != b.x()) {
+            return a.x() < b.x();
+        }
+        if (a.y() != b.y()) {
+            return a.y() < b.y();
+        }
+        return a.z() < b.z();
+    });
+
+    LOG(INFO) << "[reloc] candidate filter: chunks_total=" << static_chunks_.size()
+              << ", chunks_valid=" << valid_chunks.size()
+              << ", raw=" << raw_count
+              << ", accepted=" << candidates.size()
+              << ", reject_obstacle=" << reject_obstacle
+              << ", reject_support=" << reject_support
+              << ", reject_duplicate=" << reject_duplicate
+              << ", grid_resolution=" << opt.grid_resolution
+              << ", clear_radius=" << opt.clear_radius
+              << ", support_radius=" << opt.support_radius
+              << ", min_support_cells=" << opt.min_support_cells;
+
+    for (size_t i = 0; i < std::min<size_t>(5, candidates.size()); ++i) {
+        LOG(INFO) << "[reloc] candidate[" << i << "] = " << candidates[i].transpose();
+    }
+
+    if (candidates.empty()) {
+        LOG(ERROR) << "[reloc] no valid candidates after filtering. "
+                   << "Use RViz initial pose or relax filter params.";
+    }
+
+    return candidates;
 }
 
 void TiledMap::ClearMap() {

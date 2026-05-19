@@ -92,7 +92,15 @@ lidar_loc:
   lidar_loc_odom_th: 0.5
   init_with_fp: true
   enable_global_relocalization: false   # 大场景全局重定位:在 chunk 内按间隔撒 FP 候选
-  global_relocalization_sample_step: 10.0 # 全局重定位候选采样间隔(m),<=0 退回每 chunk 中心
+  global_relocalization_sample_step: 10.0 # 全局重定位候选采样间隔(m),<=0 不生成自动候选
+  global_relocalization_filter_enable: true
+  global_relocalization_min_chunk_points: 50
+  global_relocalization_grid_resolution: 0.2
+  global_relocalization_obstacle_z_min: 0.15
+  global_relocalization_obstacle_z_max: 1.5
+  global_relocalization_clear_radius: 0.35
+  global_relocalization_support_radius: 2.0
+  global_relocalization_min_support_cells: 10
   relocalization_margin: 0.3            # 全局重定位 best 与 second-best 的分数 margin
   relocalization_top_k: 5               # 分层搜索保留 top-K
   relocalization_coarse_yaw_steps: 8    # 分层搜索粗筛 yaw 步数 (每 45°)
