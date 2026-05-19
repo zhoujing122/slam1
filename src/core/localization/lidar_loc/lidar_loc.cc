@@ -297,6 +297,7 @@ bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr
 
     int step = (yaw_steps_override > 0) ? yaw_steps_override
                                          : static_cast<int>(lidar_loc::grid_search_angle_step);
+    step = std::clamp(step, 4, 360);
     double radius = lidar_loc::grid_search_angle_range * constant::kDEG2RAD;
     double angle_search_step = 2 * radius / step;
 
