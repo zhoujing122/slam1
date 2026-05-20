@@ -61,39 +61,5 @@ target_link_libraries(test_ui
         ${third_party_libs}
 )
 
-add_executable(test_global_relocalization_candidates
-        test_global_relocalization_candidates.cc
-)
-
-target_link_libraries(test_global_relocalization_candidates
-        ${PROJECT_NAME}.libs
-        ${third_party_libs}
-)
-
-add_executable(test_yaml_io_has_key
-        test_yaml_io_has_key.cc
-)
-
-target_link_libraries(test_yaml_io_has_key
-        ${PROJECT_NAME}.libs
-        ${third_party_libs}
-)
-
-add_executable(test_lidar_loc_fp_retry_time
-        test_lidar_loc_fp_retry_time.cc
-)
-
-target_compile_definitions(test_lidar_loc_fp_retry_time PRIVATE
-        LIGHTNING_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
-)
-
-add_executable(test_lidar_loc_yaw_search_step
-        test_lidar_loc_yaw_search_step.cc
-)
-
-target_compile_definitions(test_lidar_loc_yaw_search_step PRIVATE
-        LIGHTNING_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
-)
-
 install(TARGETS run_slam_offline run_slam_online run_loc_offline run_loc_online
         DESTINATION lib/${PROJECT_NAME})

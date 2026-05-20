@@ -112,6 +112,12 @@ bool LidarLoc::Init(const std::string& config_path) {
     ReadOptional(yaml, "lidar_loc", "relocalization_top_k", &options_.relocalization_top_k_);
     ReadOptional(yaml, "lidar_loc", "relocalization_coarse_yaw_steps",
                  &options_.relocalization_coarse_yaw_steps_);
+    ReadOptional(yaml, "lidar_loc", "auto_relocalization_confirm_frames",
+                 &options_.auto_relocalization_confirm_frames_);
+    ReadOptional(yaml, "lidar_loc", "auto_relocalization_confirm_trans_thresh",
+                 &options_.auto_relocalization_confirm_trans_thresh_);
+    ReadOptional(yaml, "lidar_loc", "auto_relocalization_confirm_yaw_thresh_deg",
+                 &options_.auto_relocalization_confirm_yaw_thresh_deg_);
     options_.enable_parking_static_ = yaml.GetValue<bool>("lidar_loc", "enable_parking_static");
     options_.enable_icp_adjust_ = yaml.GetValue<bool>("lidar_loc", "enable_icp_adjust");
     options_.with_height_ = yaml.GetValue<bool>("loop_closing", "with_height");
@@ -358,57 +364,182 @@ bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr
     return yaw_search_success;
 }
 
-bool LidarLoc::InitWithFP(CloudPtr input, const SE3& fp_pose) {
+bool LidarLoc::MatchInitPose(CloudPtr input, const SE3& fp_pose, SE3& pose_esti,
+                             double& fitness_score, CloudPtr output_cloud) {
     assert(input != nullptr && !input->empty());
+    assert(output_cloud != nullptr);
 
-    // 使用功能点的位置进行定位初始化
-    double fitness_score;
-    SE3 pose_esti = fp_pose;
-    CloudPtr output_cloud(new PointCloudType);
+    pose_esti = fp_pose;
     // 先 yaw 全范围搜索 (grid_search_angle_range/step 由 yaml 配置,默认 ±180°),
     // 这样 FP 位置正确但朝向偏差时也能 lock 上;失败再 fallback 到单点 NDT
     // (覆盖 happy path: FP 位姿已经接近 ground truth)
-    loc_inited_ = YawSearch(pose_esti, fitness_score, input, output_cloud);
-    if (!loc_inited_) {
+    bool init_success = YawSearch(pose_esti, fitness_score, input, output_cloud);
+    if (!init_success) {
         pose_esti = fp_pose;  // YawSearch 可能改写 pose_esti,fallback 用原 fp_pose
-        loc_inited_ = Localize(pose_esti, fitness_score, input, output_cloud);
+        init_success = Localize(pose_esti, fitness_score, input, output_cloud);
     }
 
-    if (loc_inited_) {
-        current_timestamp_ = LidarInputEndTime(input);
-        localization_result_.confidence_ = fitness_score;
-        current_abs_pose_ = pose_esti;
-        localization_result_.pose_ = pose_esti;
-        localization_result_.timestamp_ = current_timestamp_;
-        localization_result_.lidar_loc_valid_ = true;
-        localization_result_.status_ = LocalizationStatus::GOOD;
+    return init_success;
+}
 
-        last_abs_pose_set_ = true;
-        last_abs_pose_ = pose_esti;
+void LidarLoc::CommitInitPose(const CloudPtr& input, const SE3& pose_esti, const SE3& fp_pose,
+                              double fitness_score, const std::string& source) {
+    loc_inited_ = true;
+    pending_auto_init_active_ = false;
+    current_timestamp_ = LidarInputEndTime(input);
 
-        current_score_ = fitness_score;
-        LOG(INFO) << "fitness_score is: " << fitness_score << ", global_pose is: " << fp_pose.translation().transpose();
-        LOG(INFO) << " [Loc init pose]: " << last_abs_pose_.translation().transpose();
-        map_height_ = fp_pose.translation()[2];
+    UL lock(result_mutex_);
+    localization_result_.confidence_ = fitness_score;
+    current_abs_pose_ = pose_esti;
+    localization_result_.pose_ = pose_esti;
+    localization_result_.timestamp_ = current_timestamp_;
+    localization_result_.lidar_loc_valid_ = true;
+    localization_result_.status_ = LocalizationStatus::GOOD;
 
-        if (current_lo_pose_set_) {
-            // 设置上一次的相对定位结果
-            last_lo_pose_ = current_lo_pose_;
-            last_lo_pose_set_ = true;
+    last_abs_pose_set_ = true;
+    last_abs_pose_ = pose_esti;
 
-            last_dr_pose_ = current_dr_pose_;
-            last_dr_pose_set_ = true;
-        }
+    current_score_ = fitness_score;
+    LOG(INFO) << "fitness_score is: " << fitness_score << ", global_pose is: " << fp_pose.translation().transpose()
+              << ", source: " << source;
+    LOG(INFO) << " [Loc init pose]: " << last_abs_pose_.translation().transpose();
+    map_height_ = fp_pose.translation()[2];
 
-        //  定位成功，则清空失败记录
+    if (pending_auto_init_lo_pose_set_) {
+        last_lo_pose_ = pending_auto_init_lo_pose_;
+        last_lo_pose_set_ = true;
+    } else if (current_lo_pose_set_) {
+        last_lo_pose_ = current_lo_pose_;
+        last_lo_pose_set_ = true;
+    }
+
+    if (pending_auto_init_dr_pose_set_) {
+        last_dr_pose_ = pending_auto_init_dr_pose_;
+        last_dr_pose_set_ = true;
+    } else if (current_dr_pose_set_) {
+        last_dr_pose_ = current_dr_pose_;
+        last_dr_pose_set_ = true;
+    }
+
+    fp_init_fail_pose_vec_.clear();
+}
+
+void LidarLoc::ClearPendingAutoInit() {
+    pending_auto_init_active_ = false;
+    pending_auto_init_name_.clear();
+    pending_auto_init_score_ = 0.0;
+    pending_auto_init_count_ = 0;
+    pending_auto_init_lo_pose_set_ = false;
+    pending_auto_init_dr_pose_set_ = false;
+}
+
+bool LidarLoc::StartPendingAutoInit(const CloudPtr& input, const std::string& fp_name,
+                                    const SE3& fp_pose, const SE3& pose_esti,
+                                    double fitness_score) {
+    const int confirm_frames = std::max(1, options_.auto_relocalization_confirm_frames_);
+    if (confirm_frames <= 1) {
+        CommitInitPose(input, pose_esti, fp_pose, fitness_score, fp_name);
+        return true;
+    }
+
+    pending_auto_init_active_ = true;
+    pending_auto_init_name_ = fp_name;
+    pending_auto_init_fp_pose_ = fp_pose;
+    pending_auto_init_pose_ = pose_esti;
+    pending_auto_init_score_ = fitness_score;
+    pending_auto_init_count_ = 1;
+    pending_auto_init_lo_pose_set_ = current_lo_pose_set_;
+    if (pending_auto_init_lo_pose_set_) {
+        pending_auto_init_lo_pose_ = current_lo_pose_;
+    }
+    pending_auto_init_dr_pose_set_ = current_dr_pose_set_;
+    if (pending_auto_init_dr_pose_set_) {
+        pending_auto_init_dr_pose_ = current_dr_pose_;
+    }
+
+    LOG(INFO) << "[reloc] auto fp '" << fp_name << "' pending confirmation 1/"
+              << confirm_frames << ", score=" << fitness_score
+              << ", pose=" << pose_esti.translation().transpose();
+    SetInitRltState();
+    return false;
+}
+
+bool LidarLoc::TryConfirmPendingAutoInit(const CloudPtr& input) {
+    if (!pending_auto_init_active_) {
+        return false;
+    }
+
+    map_->LoadOnPose(pending_auto_init_pose_);
+    UpdateGlobalMap();
+    map_->CleanMapUpdate();
+
+    SE3 pose_esti = pending_auto_init_pose_;
+    double fitness_score = 0.0;
+    CloudPtr output_cloud(new PointCloudType);
+    const bool init_success = Localize(pose_esti, fitness_score, input, output_cloud);
+    const double trans_delta = (pose_esti.translation() - pending_auto_init_pose_.translation()).head<2>().norm();
+    const double yaw_delta =
+        std::fabs((pending_auto_init_pose_.so3().inverse() * pose_esti.so3()).log().z()) * constant::kRAD2DEG;
+
+    const double trans_thresh = std::max(0.0, options_.auto_relocalization_confirm_trans_thresh_);
+    const double yaw_thresh = std::max(0.0, options_.auto_relocalization_confirm_yaw_thresh_deg_);
+    if (!init_success || fitness_score < options_.min_init_confidence_ ||
+        trans_delta > trans_thresh || yaw_delta > yaw_thresh) {
+        LOG(WARNING) << "[reloc] auto fp '" << pending_auto_init_name_
+                     << "' confirmation failed, success=" << init_success
+                     << ", score=" << fitness_score
+                     << ", trans_delta=" << trans_delta
+                     << ", yaw_delta_deg=" << yaw_delta;
+        const SE3 failed_pose = current_dr_pose_set_ ? current_dr_pose_ : pending_auto_init_pose_;
+        ClearPendingAutoInit();
         fp_init_fail_pose_vec_.clear();
+        fp_init_fail_pose_vec_.emplace_back(failed_pose);
+        fp_last_tried_time_ = LidarInputEndTime(input);
+        return false;
+    }
+
+    pending_auto_init_pose_ = pose_esti;
+    pending_auto_init_score_ = fitness_score;
+    ++pending_auto_init_count_;
+
+    const int confirm_frames = std::max(1, options_.auto_relocalization_confirm_frames_);
+    LOG(INFO) << "[reloc] auto fp '" << pending_auto_init_name_ << "' confirmation "
+              << pending_auto_init_count_ << "/" << confirm_frames
+              << ", score=" << fitness_score
+              << ", trans_delta=" << trans_delta
+              << ", yaw_delta_deg=" << yaw_delta;
+
+    if (pending_auto_init_count_ >= confirm_frames) {
+        const std::string confirmed_name = pending_auto_init_name_;
+        CommitInitPose(input, pending_auto_init_pose_, pending_auto_init_fp_pose_,
+                       pending_auto_init_score_, confirmed_name);
+        LOG(INFO) << "[reloc] auto fp '" << confirmed_name
+                  << "' confirmed and committed";
+        ClearPendingAutoInit();
+        return true;
+    }
+
+    SetInitRltState();
+    return false;
+}
+
+bool LidarLoc::InitWithFP(CloudPtr input, const SE3& fp_pose) {
+    assert(input != nullptr && !input->empty());
+
+    double fitness_score = 0.0;
+    SE3 pose_esti = fp_pose;
+    CloudPtr output_cloud(new PointCloudType);
+    const bool init_success = MatchInitPose(input, fp_pose, pose_esti, fitness_score, output_cloud);
+
+    if (init_success) {
+        CommitInitPose(input, pose_esti, fp_pose, fitness_score, "manual_fp");
     } else {
         // 添加失败历史记录
         LOG(INFO) << "init failed, score: " << fitness_score;
         fp_init_fail_pose_vec_.emplace_back(fp_pose);
         fp_last_tried_time_ = LidarInputEndTime(input);
     }
-    return loc_inited_;
+    return init_success;
 }
 
 void LidarLoc::ResetLastPose(const SE3& last_pose) {
@@ -507,6 +638,7 @@ void LidarLoc::UpdateMapThread() {
 void LidarLoc::SetInitialPose(SE3 init_pose) {
     UL lock(initial_pose_mutex_);
     loc_inited_ = false;
+    ClearPendingAutoInit();
     // map_->ClearMap();
 
     initial_pose_set_ = true;
@@ -557,6 +689,11 @@ void LidarLoc::Align(const CloudPtr& input) {
         UL lock_init(initial_pose_mutex_);
         LOG(INFO) << "initing lidarloc";
         SetInitRltState();
+
+        if (pending_auto_init_active_) {
+            TryConfirmPendingAutoInit(input);
+            return;
+        }
 
         if (initial_pose_set_) {
             /// 尝试在给定点初始化。LoadOnPose 只改 loaded_chunks_,真正灌入 NDT target
@@ -646,7 +783,7 @@ void LidarLoc::Align(const CloudPtr& input) {
             ///   Phase 1b — 取分最高的 top_k 做完整 yaw 重新打分
             ///   Phase 2  — best >= min_init_confidence 且 best - second >= margin,
             ///              否则 refuse 锁定
-            ///   Phase 3  — 对 best 精化 (InitWithFP 内部 YawSearch + 状态写入)
+            ///   Phase 3  — 对 best 精化,进入 auto_* 多帧确认;确认通过后才写 GOOD
             if (!fp_init_success && !auto_fps.empty()) {
                 struct CoarseCand {
                     size_t fp_idx;
@@ -725,19 +862,25 @@ void LidarLoc::Align(const CloudPtr& input) {
                         LOG(INFO) << "[reloc] best='" << best_fp.name_
                                   << "' score=" << best_score
                                   << " margin=" << margin
-                                  << ", refining ...";
+                                  << ", refining before multi-frame confirmation ...";
                         /// Phase 1 循环最后一次 UpdateGlobalMap 的 target 不一定是 best,
                         /// 精化前必须重新同步 NDT target。
                         map_->LoadOnPose(best_fp.pose_);
                         UpdateGlobalMap();
                         map_->CleanMapUpdate();
-                        if (InitWithFP(input, best_fp.pose_)) {
-                            LOG(INFO) << "[reloc] init success with auto fp: " << best_fp.name_;
-                            fp_init_success = true;
+                        SE3 pose_esti = best_fp.pose_;
+                        double refined_score = 0.0;
+                        CloudPtr output(new PointCloudType);
+                        if (MatchInitPose(input, best_fp.pose_, pose_esti, refined_score, output)) {
+                            fp_init_success = StartPendingAutoInit(input, best_fp.name_, best_fp.pose_,
+                                                                   pose_esti, refined_score) ||
+                                              pending_auto_init_active_;
                         } else {
                             LOG(WARNING) << "[reloc] best auto fp '" << best_fp.name_
                                          << "' failed at refinement stage (coarse=" << best_score
                                          << ")";
+                            fp_init_fail_pose_vec_.emplace_back(best_fp.pose_);
+                            fp_last_tried_time_ = LidarInputEndTime(input);
                         }
                     } else {
                         LOG(WARNING) << "[reloc] AMBIGUOUS: best=" << best_score

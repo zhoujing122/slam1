@@ -105,6 +105,9 @@ lidar_loc:
   relocalization_margin: 0.3
   relocalization_top_k: 5
   relocalization_coarse_yaw_steps: 8
+  auto_relocalization_confirm_frames: 3
+  auto_relocalization_confirm_trans_thresh: 0.3
+  auto_relocalization_confirm_yaw_thresh_deg: 5.0
   min_init_confidence: 1.8
   update_dynamic_cloud: true
   update_err_h: 0.2

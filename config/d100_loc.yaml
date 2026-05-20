@@ -108,6 +108,9 @@ lidar_loc:
   relocalization_margin: 0.3           # 全局重定位 best 与 second-best 的 NDT score 差至少 0.3,否则视为模糊不锁定
   relocalization_top_k: 5              # 分层搜索: 粗筛后保留前 K 个候选进入完整 yaw 扫
   relocalization_coarse_yaw_steps: 8   # 分层搜索: 粗筛阶段的稀疏 yaw 步数(±180° 时 8 step = 每 45°一个,满足采样定理)
+  auto_relocalization_confirm_frames: 3
+  auto_relocalization_confirm_trans_thresh: 0.3
+  auto_relocalization_confirm_yaw_thresh_deg: 5.0
   min_init_confidence: 1.8
   update_dynamic_cloud: false
   update_err_h: 0.2

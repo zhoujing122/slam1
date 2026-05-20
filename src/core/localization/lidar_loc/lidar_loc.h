@@ -55,6 +55,9 @@ class LidarLoc {
         double relocalization_margin_ = 0.3;           // 全局重定位 best 与 second-best 的分数 margin 要求
         int relocalization_top_k_ = 5;                 // 分层搜索:粗筛后保留前 K 个候选进入完整 yaw 扫
         int relocalization_coarse_yaw_steps_ = 4;      // 分层搜索:粗筛阶段的稀疏 yaw 步数(覆盖 ±180° 时建议 4~6)
+        int auto_relocalization_confirm_frames_ = 3;   // auto_* 候选连续确认帧数,>=1
+        double auto_relocalization_confirm_trans_thresh_ = 0.3;     // 多帧确认允许的平移跳变(m)
+        double auto_relocalization_confirm_yaw_thresh_deg_ = 5.0;   // 多帧确认允许的角度跳变(deg)
         bool enable_parking_static_ = false;           // 是否在静止时输出固定位置
         bool enable_icp_adjust_ = false;               // 是否使用icp调整ndt匹配结果提高定位精度
 
@@ -198,6 +201,16 @@ class LidarLoc {
     bool YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr output,
                    bool skip_refine = false, int yaw_steps_override = 0);
 
+    bool MatchInitPose(CloudPtr input, const SE3& fp_pose, SE3& pose_esti,
+                       double& fitness_score, CloudPtr output_cloud);
+    void CommitInitPose(const CloudPtr& input, const SE3& pose_esti, const SE3& fp_pose,
+                        double fitness_score, const std::string& source);
+    bool StartPendingAutoInit(const CloudPtr& input, const std::string& fp_name,
+                              const SE3& fp_pose, const SE3& pose_esti,
+                              double fitness_score);
+    bool TryConfirmPendingAutoInit(const CloudPtr& input);
+    void ClearPendingAutoInit();
+
     bool CheckLidarOdomValid(const SE3& current_pose_esti, double& delta_posi);
 
     // 成员变量  ==========================================================================
@@ -220,6 +233,16 @@ class LidarLoc {
     bool initial_pose_set_ = false;  // 定位是否被手动设置
     SE3 initial_pose_;               // 手动设置的初始位姿
     bool loc_inited_ = false;        // 定位是否初始化成功
+    bool pending_auto_init_active_ = false;  // auto_* 候选正在做多帧确认
+    std::string pending_auto_init_name_;
+    SE3 pending_auto_init_fp_pose_;
+    SE3 pending_auto_init_pose_;
+    double pending_auto_init_score_ = 0.0;
+    int pending_auto_init_count_ = 0;
+    bool pending_auto_init_lo_pose_set_ = false;
+    SE3 pending_auto_init_lo_pose_;
+    bool pending_auto_init_dr_pose_set_ = false;
+    SE3 pending_auto_init_dr_pose_;
 
     double current_timestamp_ = 0;  // 本次输入的时间戳
     double last_timestamp_ = 0;     // 上次输入的时间戳
