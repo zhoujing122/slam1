@@ -96,7 +96,7 @@ lidar_loc:
   lidar_loc_odom_th: 0.5
   init_with_fp: true
   enable_global_relocalization: true   # 启动时在 chunk 内按间隔撒 FP 候选,支持大场景全自动重定位
-  global_relocalization_sample_step: 5.0 # 办公室初版建议 5m; <=0 不生成自动候选,需 RViz 手动初值或调参
+  global_relocalization_sample_step: 3.0 # 办公室初版建议 2~3m; 隔间多可试 2m; <=0 不生成自动候选,需 RViz 手动初值或调参
   global_relocalization_filter_enable: true
   global_relocalization_min_chunk_points: 50
   global_relocalization_grid_resolution: 0.2
