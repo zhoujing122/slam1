@@ -683,7 +683,7 @@ void LidarLoc::Align(const CloudPtr& input) {
     }
 
     /// 1. 车辆静止处理
-    if (parking_ && loc_inited_ && !pending_auto_init_active_) {
+    if (options_.enable_parking_static_ && parking_ && loc_inited_ && !pending_auto_init_active_) {
         LOG(INFO) << "车辆静止，不做匹配";
 
         current_abs_pose_ = last_abs_pose_;
