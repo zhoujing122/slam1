@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <cmath>
 #include <execution>
+#include <limits>
 
 #include <pcl/common/transforms.h>
 #include <pcl/filters/passthrough.h>
@@ -299,7 +301,7 @@ bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr
     double init_yaw = RPYXYZ.yaw;
 
     confidence = 0;
-    bool yaw_search_success = false;
+    bool coarse_success = false;
 
     int step = (yaw_steps_override > 0) ? yaw_steps_override
                                          : static_cast<int>(lidar_loc::grid_search_angle_step);
@@ -308,9 +310,9 @@ bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr
     double angle_search_step = 2 * radius / step;
 
     std::vector<double> searched_yaw;
-    std::vector<double> scores(step);
+    std::vector<double> scores(step, -std::numeric_limits<double>::infinity());
     std::vector<int> index;
-    std::vector<SE3> pose_opti(step);
+    std::vector<SE3> pose_opti(step, init_pose);
 
     for (int i = 0; i < step; ++i) {
         double search_yaw = init_yaw + i * angle_search_step - radius;
@@ -327,11 +329,19 @@ bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr
         RPYXYZ.yaw = searched_yaw[i];
         SE3 pose_esti = math::XYZRPYToSE3(RPYXYZ);
 
-        Localize(pose_esti, fitness_score, input, output, true);
-
-        scores[i] = fitness_score;
-        pose_opti[i] = pose_esti;
+        const bool ok = Localize(pose_esti, fitness_score, input, output, true);
+        if (ok && std::isfinite(fitness_score)) {
+            coarse_success = true;
+            scores[i] = fitness_score;
+            pose_opti[i] = pose_esti;
+        }
     });
+
+    if (!coarse_success) {
+        confidence = 0.0;
+        pose = init_pose;
+        return false;
+    }
 
     // find best match
     auto best_score_idx = std::max_element(scores.begin(), scores.end()) - scores.begin();
@@ -344,12 +354,14 @@ bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr
         return true;
     }
 
+    bool yaw_search_success = false;
     /// 高分辨率
     if (confidence > options_.min_init_confidence_) {
-        Localize(pose, confidence, input, output, false);
+        const bool ok = Localize(pose, confidence, input, output, false);
+        yaw_search_success = ok && std::isfinite(confidence) && confidence > options_.min_init_confidence_;
     }
 
-    if (confidence > options_.min_init_confidence_) {
+    if (yaw_search_success) {
         LOG(INFO) << "init success, score: " << confidence << ", th=" << options_.min_init_confidence_;
         Eigen::Vector3d suc_translation = pose.translation();
         Eigen::Matrix3d suc_rotation_matrix = pose.rotationMatrix();
@@ -358,7 +370,6 @@ bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr
         double suc_yaw = atan2(suc_rotation_matrix(1, 0), suc_rotation_matrix(0, 0));
         LOG(INFO) << "localization init success, pose: " << suc_x << ", " << suc_y << ", " << suc_yaw
                   << ", conf: " << confidence;
-        yaw_search_success = true;
     }
 
     return yaw_search_success;
@@ -813,20 +824,30 @@ void LidarLoc::Align(const CloudPtr& input) {
                         SE3 pose_esti = auto_fps[i].pose_;
                         double score = 0;
                         CloudPtr output(new PointCloudType);
-                        YawSearch(pose_esti, score, input, output, /*skip_refine=*/true,
-                                  /*yaw_steps_override=*/coarse_steps);
+                        const bool ok = YawSearch(pose_esti, score, input, output, /*skip_refine=*/true,
+                                                  /*yaw_steps_override=*/coarse_steps);
+                        if (!ok || !std::isfinite(score)) {
+                            LOG(WARNING) << "[reloc] prescreen auto fp '" << auto_fps[i].name_
+                                         << "' failed";
+                            continue;
+                        }
                         pre.push_back({static_cast<size_t>(i), pose_esti, score});
                     }
-                    std::partial_sort(pre.begin(), pre.begin() + top_k, pre.end(),
-                                      [](const CoarseCand& a, const CoarseCand& b) {
-                                          return a.score > b.score;
-                                      });
-                    pre.resize(top_k);
-                    finalist_idx.reserve(top_k);
-                    for (const auto& pc : pre) {
-                        finalist_idx.push_back(static_cast<int>(pc.fp_idx));
-                        LOG(INFO) << "[reloc] prescreen auto fp '" << auto_fps[pc.fp_idx].name_
-                                  << "' coarse-sparse score: " << pc.score;
+                    const size_t coarse_top_k = std::min(pre.size(), static_cast<size_t>(top_k));
+                    if (coarse_top_k == 0) {
+                        LOG(WARNING) << "[reloc] no valid auto fp survived coarse-sparse prescreen";
+                    } else {
+                        std::partial_sort(pre.begin(), pre.begin() + coarse_top_k, pre.end(),
+                                          [](const CoarseCand& a, const CoarseCand& b) {
+                                              return a.score > b.score;
+                                          });
+                        pre.resize(coarse_top_k);
+                        finalist_idx.reserve(coarse_top_k);
+                        for (const auto& pc : pre) {
+                            finalist_idx.push_back(static_cast<int>(pc.fp_idx));
+                            LOG(INFO) << "[reloc] prescreen auto fp '" << auto_fps[pc.fp_idx].name_
+                                      << "' coarse-sparse score: " << pc.score;
+                        }
                     }
                 } else {
                     finalist_idx.reserve(n_auto);
@@ -844,10 +865,19 @@ void LidarLoc::Align(const CloudPtr& input) {
                     SE3 pose_esti = auto_fps[idx].pose_;
                     double score = 0;
                     CloudPtr output(new PointCloudType);
-                    YawSearch(pose_esti, score, input, output, /*skip_refine=*/true);
+                    const bool ok = YawSearch(pose_esti, score, input, output, /*skip_refine=*/true);
+                    if (!ok || !std::isfinite(score)) {
+                        LOG(WARNING) << "[reloc] auto fp '" << auto_fps[idx].name_
+                                     << "' coarse search failed";
+                        continue;
+                    }
                     cands.push_back({static_cast<size_t>(idx), pose_esti, score});
                     LOG(INFO) << "[reloc] auto fp '" << auto_fps[idx].name_
                               << "' coarse score: " << score;
+                }
+
+                if (cands.empty()) {
+                    LOG(WARNING) << "[reloc] no auto fp survived coarse search";
                 }
 
                 std::sort(cands.begin(), cands.end(),
