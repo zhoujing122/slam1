@@ -26,6 +26,8 @@ namespace lightning::loc {
 
 namespace {
 
+using NDTType = pclomp::NormalDistributionsTransform<PointType, PointType>;
+
 template <typename T>
 void ReadOptional(const YAML_IO& yaml, const std::string& node, const std::string& key, T* value) {
     if (value != nullptr && yaml.HasKey(node, key)) {
@@ -37,24 +39,33 @@ double LidarInputEndTime(const CloudPtr& input) {
     return math::ToSec(input->header.stamp) + lo::lidar_time_interval;
 }
 
+NDTType::Ptr BuildFineNdt() {
+    NDTType::Ptr ndt(new NDTType());
+    ndt->setResolution(1.0);
+    ndt->setNeighborhoodSearchMethod(pclomp::DIRECT7);
+    ndt->setOulierRatio(0.45);
+    ndt->setStepSize(0.1);
+    ndt->setTransformationEpsilon(0.01);
+    ndt->setMaximumIterations(20);
+    ndt->setNumThreads(4);
+    return ndt;
+}
+
+NDTType::Ptr BuildRoughNdt() {
+    NDTType::Ptr ndt(new NDTType());
+    ndt->setResolution(5.0);
+    ndt->setNeighborhoodSearchMethod(pclomp::DIRECT7);
+    ndt->setStepSize(0.1);
+    ndt->setMaximumIterations(4);
+    ndt->setNumThreads(4);
+    return ndt;
+}
+
 }  // namespace
 
 LidarLoc::LidarLoc(LidarLoc::Options options) : options_(options) {
-    pcl_ndt_.reset(new NDTType());
-    pcl_ndt_->setResolution(1.0);
-    pcl_ndt_->setNeighborhoodSearchMethod(pclomp::DIRECT7);
-    pcl_ndt_->setOulierRatio(0.45);
-    pcl_ndt_->setStepSize(0.1);
-    pcl_ndt_->setTransformationEpsilon(0.01);
-    pcl_ndt_->setMaximumIterations(20);
-    pcl_ndt_->setNumThreads(4);
-
-    pcl_ndt_rough_.reset(new NDTType());
-    pcl_ndt_rough_->setResolution(5.0);
-    pcl_ndt_rough_->setNeighborhoodSearchMethod(pclomp::DIRECT7);
-    pcl_ndt_rough_->setStepSize(0.1);
-    pcl_ndt_rough_->setMaximumIterations(4);
-    pcl_ndt_rough_->setNumThreads(4);
+    pcl_ndt_ = BuildFineNdt();
+    pcl_ndt_rough_ = BuildRoughNdt();
 
     pcl_icp_.reset(new ICPType());
     pcl_icp_->setMaximumIterations(4);
@@ -586,12 +597,7 @@ bool LidarLoc::TryOtherSolution(CloudPtr input, SE3& pose) {
 }
 
 bool LidarLoc::UpdateGlobalMap() {
-    NDTType::Ptr ndt(new NDTType());
-    ndt->setResolution(1.0);
-    ndt->setNeighborhoodSearchMethod(pclomp::DIRECT7);
-    ndt->setStepSize(0.1);
-    ndt->setMaximumIterations(4);
-    ndt->setNumThreads(4);
+    NDTType::Ptr ndt = BuildFineNdt();
 
     map_->SetNewTargetForNDT(ndt);
     ndt->initCompute();
@@ -600,12 +606,7 @@ bool LidarLoc::UpdateGlobalMap() {
     /// 之前用 `if (!loc_inited_)` gate 着,导致首次初始化成功后 rough 凝固,
     /// 后续 /initialpose 重触发(SetInitialPose 置 loc_inited_=false)时
     /// YawSearch 会拿陈旧 chunks 的 rough NDT 匹配。
-    NDTType::Ptr ndt_rough(new NDTType());
-    ndt_rough->setResolution(5.0);
-    ndt_rough->setNeighborhoodSearchMethod(pclomp::DIRECT7);
-    ndt_rough->setStepSize(0.1);
-    ndt_rough->setMaximumIterations(4);
-    ndt_rough->setNumThreads(4);
+    NDTType::Ptr ndt_rough = BuildRoughNdt();
     map_->SetNewTargetForNDT(ndt_rough);
 
     UL lock(match_mutex_);
