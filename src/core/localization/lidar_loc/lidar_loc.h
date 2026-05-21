@@ -43,7 +43,7 @@ class LidarLoc {
         float min_init_confidence_ = 0.1;              // 初始化时要求的最小分值
         bool init_with_fp_ = true;                     // 是否使用功能点进行初始化
         bool enable_global_relocalization_ = false;    // 启动时在 chunk 内按间隔撒 FP 候选(大场景全局重定位)
-        double global_relocalization_sample_step_ = 10.0;  // 全局重定位候选采样间隔,<=0 时不生成候选
+        double global_relocalization_sample_step_ = 2.0;  // 全局重定位候选采样间隔,<=0 时不生成候选
         bool global_relocalization_filter_enable_ = true;   // 是否过滤不可用的全局重定位候选
         int global_relocalization_min_chunk_points_ = 50;   // 参与候选生成的最少 chunk 点数
         double global_relocalization_grid_resolution_ = 0.2;      // 候选过滤 2D 栅格分辨率
