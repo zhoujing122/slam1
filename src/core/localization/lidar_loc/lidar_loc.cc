@@ -705,12 +705,9 @@ void LidarLoc::Align(const CloudPtr& input) {
         LOG(INFO) << "initing lidarloc";
         SetInitRltState();
 
-        if (pending_auto_init_active_) {
-            TryConfirmPendingAutoInit(input);
-            return;
-        }
-
         if (initial_pose_set_) {
+            ClearPendingAutoInit();
+
             /// 尝试在给定点初始化。LoadOnPose 只改 loaded_chunks_,真正灌入 NDT target
             /// 的是 UpdateGlobalMap;后台 UpdateMapThread 10ms 周期太慢,主线程必须
             /// 同步执行,否则会拿上一个区域的栅格做匹配。
@@ -722,6 +719,11 @@ void LidarLoc::Align(const CloudPtr& input) {
                 initial_pose_set_ = false;
                 return;
             }
+        }
+
+        if (pending_auto_init_active_) {
+            TryConfirmPendingAutoInit(input);
+            return;
         }
 
         if (options_.init_with_fp_) {
