@@ -666,21 +666,24 @@ void LidarLoc::Align(const CloudPtr& input) {
     }
 
     /// 1. 车辆静止处理
-    if (parking_ && loc_inited_) {
+    if (parking_ && loc_inited_ && !pending_auto_init_active_) {
         LOG(INFO) << "车辆静止，不做匹配";
 
-        UpdateState(input);
         current_abs_pose_ = last_abs_pose_;
+        current_score_ = localization_result_.confidence_;
         lidar_loc_pose_queue_.emplace_back(current_time, current_abs_pose_);
 
-        UL lock(result_mutex_);
-        localization_result_.timestamp_ = current_time;
-        localization_result_.pose_ = current_abs_pose_;
-
-        if (options_.enable_parking_static_) {
-            localization_result_.is_parking_ = true;
+        {
+            UL lock(result_mutex_);
+            localization_result_.timestamp_ = current_time;
+            localization_result_.pose_ = current_abs_pose_;
+            localization_result_.is_parking_ = options_.enable_parking_static_;
             localization_result_.valid_ = true;
+            localization_result_.lidar_loc_valid_ = true;
+            localization_result_.status_ = LocalizationStatus::GOOD;
         }
+
+        UpdateState(input);
         return;
     }
 
