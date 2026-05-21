@@ -633,6 +633,11 @@ bool LidarLoc::UpdateGlobalMap() {
 void LidarLoc::UpdateMapThread() {
     LOG(INFO) << "UpdateMapThread thread is running";
     while (!update_map_quit_) {
+        if (!loc_inited_ || pending_auto_init_active_) {
+            usleep(10000);
+            continue;
+        }
+
         if (map_->MapUpdated() || map_->DynamicMapUpdated()) {
             UpdateGlobalMap();
 
