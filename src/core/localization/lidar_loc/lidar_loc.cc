@@ -689,6 +689,9 @@ void LidarLoc::Align(const CloudPtr& input) {
         current_abs_pose_ = last_abs_pose_;
         current_score_ = localization_result_.confidence_;
         lidar_loc_pose_queue_.emplace_back(current_time, current_abs_pose_);
+        while (lidar_loc_pose_queue_.size() > 1000) {
+            lidar_loc_pose_queue_.pop_front();
+        }
 
         {
             UL lock(result_mutex_);
