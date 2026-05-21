@@ -500,8 +500,15 @@ bool LidarLoc::TryConfirmPendingAutoInit(const CloudPtr& input) {
     CloudPtr output_cloud(new PointCloudType);
     const bool init_success = Localize(pose_esti, fitness_score, input, output_cloud);
     const double trans_delta = (pose_esti.translation() - pending_auto_init_pose_.translation()).head<2>().norm();
+    const auto YawOf = [](const SE3& p) {
+        const auto R = p.so3().matrix();
+        return std::atan2(R(1, 0), R(0, 0));
+    };
+    const double pending_yaw = YawOf(pending_auto_init_pose_);
+    const double pose_yaw = YawOf(pose_esti);
     const double yaw_delta =
-        std::fabs((pending_auto_init_pose_.so3().inverse() * pose_esti.so3()).log().z()) * constant::kRAD2DEG;
+        std::fabs(std::atan2(std::sin(pose_yaw - pending_yaw), std::cos(pose_yaw - pending_yaw))) *
+        constant::kRAD2DEG;
 
     const double trans_thresh = std::max(0.0, options_.auto_relocalization_confirm_trans_thresh_);
     const double yaw_thresh = std::max(0.0, options_.auto_relocalization_confirm_yaw_thresh_deg_);
