@@ -905,6 +905,7 @@ void LidarLoc::Align(const CloudPtr& input) {
                         const auto& best_fp = auto_fps[cands[0].fp_idx];
                         LOG(INFO) << "[reloc] best='" << best_fp.name_
                                   << "' score=" << best_score
+                                  << " second=" << second_score
                                   << " margin=" << margin
                                   << ", refining before multi-frame confirmation ...";
                         /// Phase 1 循环最后一次 UpdateGlobalMap 的 target 不一定是 best,
